@@ -87,15 +87,44 @@ def generate_topics(
     top_p,
     verbose,
     early_stop=100,  # Modify this parameter to control early stopping
+    num_topics=None,  # Target number of topics to generate (None = no limit)
 ):
     """
     Generate topics from documents using LLMs.
+    
+    Parameters:
+    - topics_root: TopicTree object
+    - topics_list: List of topic strings
+    - context_len: Maximum context length for the model
+    - docs: List of documents to process
+    - seed_file: Path to seed file
+    - api_client: API client object
+    - generation_prompt: Prompt template for generation
+    - temperature: Sampling temperature
+    - max_tokens: Maximum tokens for response
+    - top_p: Top-p sampling parameter
+    - verbose: Whether to print verbose output
+    - early_stop: Number of consecutive duplicates before stopping (ignored if num_topics is set)
+    - num_topics: Target number of topics to generate. If set, generation stops when this 
+                  number is reached. Common values: 25, 50, 75, 100. None means no limit.
+    
+    Returns:
+    - responses: List of model responses
+    - topics_list: Updated list of topic strings
+    - topics_root: Updated TopicTree object
     """
     responses = []
     running_dups = 0
     topic_format = regex.compile(r"^\[(\d+)\] ([\w\s]+):(.+)")
 
     for i, doc in enumerate(tqdm(docs)):
+        # Check if we've reached the target number of topics
+        current_topic_count = len(list(topics_root.root.children))
+        if num_topics is not None and current_topic_count >= num_topics:
+            if verbose:
+                print(f"Reached target of {num_topics} topics. Stopping generation.")
+            break
+            
         prompt = prompt_formatting(
             generation_prompt,
             api_client,
@@ -114,6 +143,14 @@ def generate_topics(
             # Parsing topics and organizing topic tree
             topics = [t.strip() for t in response.split("\n")]
             for t in topics:
+                # Check again after parsing each topic (in case multiple topics per response)
+                current_topic_count = len(list(topics_root.root.children))
+                if num_topics is not None and current_topic_count >= num_topics:
+                    if verbose:
+                        print(f"Reached target of {num_topics} topics. Stopping generation.")
+                    responses.append(response)
+                    return responses, topics_list, topics_root
+                    
                 if not regex.match(topic_format, t):
                     print(f"Invalid topic format: {t}. Skipping...")
                     continue
@@ -130,12 +167,20 @@ def generate_topics(
                 ):  # Implement early stopping if no new topics are generated for a while
                     dups[0].count += 1
                     running_dups += 1
-                    if running_dups > early_stop:
+                    # Only apply early stopping if num_topics is not set
+                    if num_topics is None and running_dups > early_stop:
+                        if verbose:
+                            print(f"Early stopping: {running_dups} consecutive duplicates.")
                         return responses, topics_list, topics_root
                 else:
                     topics_root._add_node(lvl, name, 1, desc, topics_root.root)
                     topics_list = topics_root.to_topic_list(desc=False, count=False)
                     running_dups = 0
+                    
+                    if verbose:
+                        current_count = len(list(topics_root.root.children))
+                        target_str = f"/{num_topics}" if num_topics else ""
+                        print(f"New topic added: {name} (Total: {current_count}{target_str})")
 
             if verbose:
                 print(f"Topics: {response}")
@@ -151,7 +196,8 @@ def generate_topics(
 
 
 def generate_topic_lvl1(
-    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose
+    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose,
+    num_topics=None, early_stop=100
 ):
     """
     Generate high-level topics
@@ -165,6 +211,10 @@ def generate_topic_lvl1(
     - out_file (str): File to write results to
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
+    - num_topics (int): Target number of topics to generate. Common values: 25, 50, 75, 100.
+                        If None, generation continues until early stopping or all docs processed.
+    - early_stop (int): Number of consecutive duplicates before stopping (default: 100).
+                        Ignored if num_topics is set.
 
     Returns:
     - topics_root (TopicTree): Root node of the topic tree
@@ -181,6 +231,10 @@ def generate_topic_lvl1(
         print(f"Seed file: {seed_file}")
         print(f"Output file: {out_file}")
         print(f"Topic file: {topic_file}")
+        if num_topics:
+            print(f"Target number of topics: {num_topics}")
+        else:
+            print(f"Early stopping after {early_stop} consecutive duplicates")
         print("-------------------")
 
     # Model configuration
@@ -211,10 +265,21 @@ def generate_topic_lvl1(
         max_tokens,
         top_p,
         verbose,
+        early_stop=early_stop,
+        num_topics=num_topics,
     )
 
     # Save generated topics
     topics_root.to_file(topic_file)
+    
+    # Print summary
+    final_topic_count = len(list(topics_root.root.children))
+    print(f"\n=== Topic Generation Complete ===")
+    print(f"Total topics generated: {final_topic_count}")
+    if num_topics:
+        print(f"Target was: {num_topics}")
+    print(f"Topics saved to: {topic_file}")
+    print("=================================\n")
 
     try:
         df = df.iloc[: len(responses)]
@@ -269,9 +334,20 @@ if __name__ == "__main__":
         default="data/output/generation_1.md",
         help="File to write topics to",
     )
-
     parser.add_argument(
-        "--verbose", type=bool, default=False, help="Whether to print out results"
+        "--num_topics",
+        type=int,
+        default=None,
+        help="Target number of topics to generate (e.g., 25, 50, 75, 100). If not set, uses early stopping.",
+    )
+    parser.add_argument(
+        "--early_stop",
+        type=int,
+        default=100,
+        help="Number of consecutive duplicates before stopping (default: 100). Ignored if --num_topics is set.",
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Whether to print out results"
     )
     args = parser.parse_args()
     generate_topic_lvl1(
@@ -283,4 +359,6 @@ if __name__ == "__main__":
         args.out_file,
         args.topic_file,
         args.verbose,
+        num_topics=args.num_topics,
+        early_stop=args.early_stop,
     )
