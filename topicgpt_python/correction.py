@@ -5,6 +5,7 @@ from tqdm import tqdm
 from sentence_transformers import SentenceTransformer, util
 import regex as re
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from topicgpt_python.utils import *
 
 
@@ -55,27 +56,14 @@ def topic_parser(root_topics, df, verbose=False):
     return error, hallucinated
 
 
-def correct(
-    api_client,
-    topics_root,
-    df,
-    correction_prompt,
-    context_len,
-    reprompt_idx,
-    temperature=1.0,
-    top_p=1.0,
-    max_tokens=1000,
-    verbose=False,
-):
-    """Return documents with assigned topics based on relevance."""
-    all_topics = "\n".join(topics_root.to_topic_list(desc=True, count=False))
-
-    for i in tqdm(reprompt_idx, desc="Correcting topics"):
-        doc = df.at[i, "prompted_docs"]
-        if (
-            api_client.estimate_token_count(doc + correction_prompt + all_topics)
-            > context_len
-        ):
+def _process_correction_doc(args):
+    """Helper function for concurrent processing of a single correction."""
+    idx, doc, prev_response, api_client, correction_prompt, all_topics, context_len, max_tokens, temperature, top_p = args
+    
+    try:
+        # Handle long prompts by filtering topics
+        topics_to_use = all_topics
+        if api_client.estimate_token_count(doc + correction_prompt + all_topics) > context_len:
             topic_embeddings = {
                 topic: sbert.encode(topic, convert_to_tensor=True)
                 for topic in all_topics.split("\n")
@@ -93,30 +81,70 @@ def correct(
                 and len(top_topics) > 50
             ):
                 top_topics.pop()
-            all_topics = "\n".join(top_topics)
+            topics_to_use = "\n".join(top_topics)
 
             max_doc_len = context_len - api_client.estimate_token_count(
-                correction_prompt + all_topics
+                correction_prompt + topics_to_use
             )
             if api_client.estimate_token_count(doc) > max_doc_len:
-                doc = api_client.truncate(doc, max_doc_len)
+                doc = api_client.truncating(doc, max_doc_len)
 
-        try:
-            msg = f"Previously, this document was assigned to: {df.at[i, 'responses']}. Please reassign it to an existing topic in the hierarchy."
-            prompt = correction_prompt.format(
-                Document=doc, tree=all_topics, Message=msg
-            )
-            result = api_client.iterative_prompt(
-                prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p
-            )
-            if verbose:
-                print(f"Document {i+1}: {result}")
-                print("-" * 20)
-            df.at[i, "responses"] = result
-        except Exception as e:
-            print(f"Error correcting document {i+1}: {e}")
-            traceback.print_exc()
-            df.at[i, "responses"] = "Error"
+        msg = f"Previously, this document was assigned to: {prev_response}. Please reassign it to an existing topic in the hierarchy."
+        prompt = correction_prompt.format(
+            Document=doc, tree=topics_to_use, Message=msg
+        )
+        result = api_client.iterative_prompt(
+            prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p
+        )
+        return idx, result, None
+    except Exception as e:
+        return idx, "Error", str(e)
+
+
+def correct(
+    api_client,
+    topics_root,
+    df,
+    correction_prompt,
+    context_len,
+    reprompt_idx,
+    temperature=1.0,
+    top_p=1.0,
+    max_tokens=1000,
+    verbose=False,
+    max_workers=8,  # Number of concurrent API calls
+):
+    """Return documents with assigned topics based on relevance (with concurrent processing)."""
+    all_topics = "\n".join(topics_root.to_topic_list(desc=True, count=False))
+    
+    # Prepare arguments for all documents that need correction
+    all_args = [
+        (i, df.at[i, "prompted_docs"], df.at[i, "responses"], api_client, 
+         correction_prompt, all_topics, context_len, max_tokens, temperature, top_p)
+        for i in reprompt_idx
+    ]
+    
+    # Process concurrently
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_process_correction_doc, args): args[0] 
+                  for args in all_args}
+        
+        pbar = tqdm(total=len(reprompt_idx), desc="Correcting topics")
+        for future in as_completed(futures):
+            try:
+                idx, result, error = future.result()
+                if error:
+                    print(f"Error correcting document {idx+1}: {error}")
+                df.at[idx, "responses"] = result
+                if verbose and result != "Error":
+                    print(f"Document {idx+1}: {result}")
+                    print("-" * 20)
+            except Exception as e:
+                print(f"Error in future: {e}")
+                traceback.print_exc()
+            pbar.update(1)
+        pbar.close()
+    
     return df
 
 

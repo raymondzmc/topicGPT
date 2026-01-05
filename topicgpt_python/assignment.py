@@ -3,15 +3,72 @@ from topicgpt_python.utils import *
 
 import openai
 import numpy as np
-from tqdm import trange
+from tqdm import tqdm, trange
 import traceback
 import random
 from sentence_transformers import SentenceTransformer, util
 import argparse
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 sbert = SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def _prepare_assignment_prompt(doc, api_client, tree_str, assignment_prompt, context_len):
+    """Prepare the prompt for a single document (handles topic filtering and truncation)."""
+    cos_sim = {}
+    doc_emb = sbert.encode(doc, convert_to_tensor=True)
+
+    # Include only most relevant topics such that the total length
+    # of tree_str is less than max_top_len
+    if api_client.estimate_token_count(tree_str) > context_len:
+        for top in tree_str.split("\n"):
+            top_emb = sbert.encode(top, convert_to_tensor=True)
+            cos_sim[top] = util.cos_sim(top_emb, doc_emb)
+        top_top = sorted(cos_sim, key=cos_sim.get, reverse=True)
+
+        seed_len = 0
+        seed_str = ""
+        while seed_len < context_len and len(top_top) > 0:
+            new_seed = top_top.pop(0)
+            token_count = api_client.estimate_token_count(new_seed + "\n")
+            if seed_len + token_count > context_len:
+                break
+            else:
+                seed_str += new_seed + "\n"
+                seed_len += token_count
+    else:
+        seed_str = tree_str
+
+    # Truncate document if too long
+    max_doc_len = (
+        context_len
+        - api_client.estimate_token_count(assignment_prompt)
+        - api_client.estimate_token_count(seed_str)
+    )
+    processed_doc = doc
+    if api_client.estimate_token_count(doc) > max_doc_len:
+        processed_doc = api_client.truncating(doc, max_doc_len)
+
+    prompt = assignment_prompt.format(Document=processed_doc, tree=seed_str)
+    return prompt, processed_doc
+
+
+def _process_assignment_doc(args):
+    """Helper function for concurrent processing of a single assignment."""
+    doc, api_client, tree_str, assignment_prompt, context_len, max_tokens, temperature, top_p = args
+    
+    try:
+        prompt, processed_doc = _prepare_assignment_prompt(
+            doc, api_client, tree_str, assignment_prompt, context_len
+        )
+        response = api_client.iterative_prompt(
+            prompt, max_tokens, temperature, top_p=top_p, verbose=False
+        )
+        return response, processed_doc, None
+    except Exception as e:
+        return "Error", doc, str(e)
 
 
 def assignment(
@@ -24,9 +81,10 @@ def assignment(
     top_p,
     max_tokens,
     verbose,
+    max_workers=8,  # Number of concurrent API calls
 ):
     """
-    Return documents with topics assigned to them
+    Return documents with topics assigned to them (with concurrent processing)
 
     Parameters:
     - api_client: APIClient object
@@ -38,69 +96,48 @@ def assignment(
     - top_p: float
     - max_tokens: int
     - verbose: bool
+    - max_workers: int (number of concurrent API calls)
 
     Returns:
     - res: list of responses
     """
     tree_str = "\n".join(topics_root.to_topic_list(desc=True, count=False))
-    prompted_docs, res = [], []
-
-    for i in trange(len(docs)):
-        doc = docs[i]
-        cos_sim = {}
-        doc_emb = sbert.encode(doc, convert_to_tensor=True)
-
-        # Include only most relevant topics such that the total length
-        # of tree_str is less than max_top_len
-        if api_client.estimate_token_count(tree_str) > context_len:
-            for top in tree_str.split("\n"):
-                top_emb = sbert.encode(top, convert_to_tensor=True)
-                cos_sim[top] = util.cos_sim(top_emb, doc_emb)
-            top_top = sorted(cos_sim, key=cos_sim.get, reverse=True)
-
-            seed_len = 0
-            seed_str = ""
-            while seed_len < context_len and len(top_top) > 0:
-                new_seed = top_top.pop(0)
-                token_count = api_client.estimate_token_count(new_seed + "\n")
-                if seed_len + token_count > context_len:
-                    break
-                else:
-                    seed_str += new_seed + "\n"
-                    seed_len += (
-                        token_count  # Update only with the new topic's token count
-                    )
-
-        else:
-            seed_str = tree_str
-
-        # Truncate document if too long
-        max_doc_len = (
-            context_len
-            - api_client.estimate_token_count(assignment_prompt)
-            - api_client.estimate_token_count(seed_str)
-        )
-        if api_client.estimate_token_count(doc) > max_doc_len:
-            print(
-                f"Truncating document from {api_client.estimate_token_count(doc)} to {max_doc_len}"
-            )
-            doc = api_client.truncating(doc, max_doc_len)
-
-        try:
-            prompt = assignment_prompt.format(Document=doc, tree=seed_str)
-            response = api_client.iterative_prompt(
-                prompt, max_tokens, temperature, top_p=top_p, verbose=verbose
-            )
-            res.append(response)
-        except Exception as e:
-            response = "Error"
-            res.append("Error")
-            traceback.print_exc()
-
-        if verbose:
-            print(f"Response: {response}")
-            print("--------------------")
-        prompted_docs.append(doc)
+    prompted_docs = [None] * len(docs)
+    res = [None] * len(docs)
+    
+    # Prepare arguments for all documents
+    all_args = [
+        (doc, api_client, tree_str, assignment_prompt, context_len, 
+         max_tokens, temperature, top_p)
+        for doc in docs
+    ]
+    
+    # Process concurrently
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_process_assignment_doc, args): i 
+                  for i, args in enumerate(all_args)}
+        
+        pbar = tqdm(total=len(docs), desc="Assigning topics")
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                response, processed_doc, error = future.result()
+                if error:
+                    if verbose:
+                        print(f"Error processing document {idx}: {error}")
+                res[idx] = response
+                prompted_docs[idx] = processed_doc
+                
+                if verbose and response != "Error":
+                    print(f"Response: {response}")
+                    print("--------------------")
+            except Exception as e:
+                traceback.print_exc()
+                res[idx] = "Error"
+                prompted_docs[idx] = docs[idx]
+            pbar.update(1)
+        pbar.close()
+    
     return res, prompted_docs
 
 

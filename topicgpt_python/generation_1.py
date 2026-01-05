@@ -7,6 +7,7 @@ from sentence_transformers import SentenceTransformer, util
 import argparse
 import os
 from anytree import Node, RenderTree
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Set environment variables
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -74,6 +75,29 @@ def prompt_formatting(
     return prompt
 
 
+def _process_single_doc(args):
+    """Helper function for concurrent processing of a single document."""
+    doc, generation_prompt, api_client, seed_file, topics_list, context_len, max_tokens, temperature, top_p, verbose = args
+    
+    prompt = prompt_formatting(
+        generation_prompt,
+        api_client,
+        doc,
+        seed_file,
+        topics_list,
+        context_len,
+        verbose=False,  # Reduce noise in concurrent mode
+    )
+    
+    try:
+        response = api_client.iterative_prompt(
+            prompt, max_tokens, temperature, top_p=top_p, verbose=False
+        )
+        return response, None
+    except Exception as e:
+        return None, str(e)
+
+
 def generate_topics(
     topics_root,
     topics_list,
@@ -87,67 +111,93 @@ def generate_topics(
     top_p,
     verbose,
     early_stop=100,  # Modify this parameter to control early stopping
+    max_workers=8,  # Number of concurrent API calls
 ):
     """
     Generate topics from documents using LLMs.
+    Uses concurrent processing in batches for faster execution.
     """
     responses = []
     running_dups = 0
     topic_format = regex.compile(r"^\[(\d+)\] ([\w\s]+):(.+)")
-
-    for i, doc in enumerate(tqdm(docs)):
-        prompt = prompt_formatting(
-            generation_prompt,
-            api_client,
-            doc,
-            seed_file,
-            topics_list,
-            context_len,
-            verbose,
-        )
-
-        try:
-            response = api_client.iterative_prompt(
-                prompt, max_tokens, temperature, top_p=top_p, verbose=verbose
-            )
-
-            # Parsing topics and organizing topic tree
+    
+    # Process documents in batches for concurrent execution
+    batch_size = max_workers * 2  # Process 2x workers at a time
+    doc_batches = [docs[i:i + batch_size] for i in range(0, len(docs), batch_size)]
+    
+    pbar = tqdm(total=len(docs), desc="Generating topics")
+    
+    for batch in doc_batches:
+        # Prepare arguments for concurrent processing
+        # Each doc in batch uses current topics_list (frozen for this batch)
+        batch_args = [
+            (doc, generation_prompt, api_client, seed_file, topics_list, 
+             context_len, max_tokens, temperature, top_p, verbose)
+            for doc in batch
+        ]
+        
+        batch_responses = []
+        
+        # Process batch concurrently
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_process_single_doc, args): i 
+                      for i, args in enumerate(batch_args)}
+            
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    response, error = future.result()
+                    if error:
+                        print(f"Error processing document: {error}")
+                        batch_responses.append((idx, "Error"))
+                    else:
+                        batch_responses.append((idx, response))
+                except Exception as e:
+                    traceback.print_exc()
+                    batch_responses.append((idx, "Error"))
+        
+        # Sort by original order and process responses
+        batch_responses.sort(key=lambda x: x[0])
+        
+        for _, response in batch_responses:
+            pbar.update(1)
+            
+            if response == "Error":
+                responses.append("Error")
+                continue
+                
+            responses.append(response)
+            
+            # Parse topics and update tree
             topics = [t.strip() for t in response.split("\n") if t.strip()]
             for t in topics:
                 if not regex.match(topic_format, t):
-                    if verbose:  # Only show errors in verbose mode
-                        print(f"Invalid topic format: {t}. Skipping...")
                     continue
                 groups = regex.match(topic_format, t)
                 lvl, name, desc = int(groups[1]), groups[2].strip(), groups[3].strip()
 
                 if lvl != 1:
-                    print(f"Lower level topics are not allowed: {t}. Skipping...")
                     continue
                 dups = topics_root.find_duplicates(name, lvl)
 
-                if (
-                    dups
-                ):  # Implement early stopping if no new topics are generated for a while
+                if dups:
                     dups[0].count += 1
                     running_dups += 1
-                    if running_dups > early_stop:
-                        return responses, topics_list, topics_root
                 else:
                     topics_root._add_node(lvl, name, 1, desc, topics_root.root)
                     topics_list = topics_root.to_topic_list(desc=False, count=False)
                     running_dups = 0
-
+            
             if verbose:
                 print(f"Topics: {response}")
                 print("--------------------")
-            responses.append(response)
-
-        except Exception as e:
-            traceback.print_exc()
-            responses.append("Error")
-            break
-
+        
+        # Check early stopping after each batch
+        if running_dups > early_stop:
+            pbar.close()
+            return responses, topics_list, topics_root
+    
+    pbar.close()
     return responses, topics_list, topics_root
 
 
