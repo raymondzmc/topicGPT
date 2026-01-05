@@ -17,8 +17,17 @@ def metric_calc(data_file, ground_truth_col, output_col):
     output_topics = data[output_col]
 
     # Only retain the first topic in the list of topics
+    # Handle malformed responses (errors, hallucinations) gracefully
     output_pattern = r"\[(?:\d+)\] ([^:]+): (?:.+)"
-    output_topics = [re.findall(output_pattern, topic)[0] for topic in output_topics]
+    parsed_topics = []
+    for topic in output_topics:
+        matches = re.findall(output_pattern, str(topic))
+        if matches:
+            parsed_topics.append(matches[0].strip())
+        else:
+            # Fallback for malformed responses - use "Unknown" 
+            parsed_topics.append("Unknown")
+    output_topics = parsed_topics
 
     data["parsed_output"] = output_topics
 
