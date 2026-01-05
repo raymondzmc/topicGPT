@@ -9,7 +9,7 @@ import subprocess
 
 from openai import OpenAI, AzureOpenAI
 import tiktoken
-from vllm import LLM, SamplingParams
+# from vllm import LLM, SamplingParams
 import vertexai
 from vertexai.generative_models import (
     GenerationConfig,
@@ -65,13 +65,13 @@ class APIClient:
                 base_url = 'http://localhost:11434/v1',
                 api_key='ollama', # required, but unused
             )
-        elif api == "vllm":
-            self.hf_token = os.environ.get("HF_TOKEN")
-            self.llm = LLM(
-                self.model,
-                download_dir=os.environ.get("HF_HOME", None),
-            )
-            self.tokenizer = self.llm.get_tokenizer()
+        # elif api == "vllm":
+        #     self.hf_token = os.environ.get("HF_TOKEN")
+        #     self.llm = LLM(
+        #         self.model,
+        #         download_dir=os.environ.get("HF_HOME", None),
+        #     )
+        #     self.tokenizer = self.llm.get_tokenizer()
         elif api == "gemini": 
             genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
             self.model_obj = genai.GenerativeModel(self.model)
@@ -272,23 +272,23 @@ class APIClient:
                             time.sleep(60)
 
 
-                elif self.api == "vllm":
-                    sampling_params = SamplingParams(
-                        temperature=temperature,
-                        top_p=top_p,
-                        max_tokens=max_tokens,
-                        stop_token_ids=[
-                            self.tokenizer.eos_token_id,
-                            self.tokenizer.convert_tokens_to_ids("<|eot_id|>"),
-                        ],
-                    )
-                    final_prompt = self.tokenizer.apply_chat_template(
-                        message,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                    vllm_output = self.llm.generate([final_prompt], sampling_params)
-                    return [output.outputs[0].text for output in vllm_output][0]
+                # elif self.api == "vllm":
+                #     sampling_params = SamplingParams(
+                #         temperature=temperature,
+                #         top_p=top_p,
+                #         max_tokens=max_tokens,
+                #         stop_token_ids=[
+                #             self.tokenizer.eos_token_id,
+                #             self.tokenizer.convert_tokens_to_ids("<|eot_id|>"),
+                #         ],
+                #     )
+                #     final_prompt = self.tokenizer.apply_chat_template(
+                #         message,
+                #         tokenize=False,
+                #         add_generation_prompt=True,
+                #     )
+                #     vllm_output = self.llm.generate([final_prompt], sampling_params)
+                #     return [output.outputs[0].text for output in vllm_output][0]
                 
                 elif self.api == "gemini":
                     genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
@@ -324,55 +324,55 @@ class APIClient:
                 else:
                     raise
 
-    def batch_prompt(
-        self,
-        prompts: list,
-        max_tokens: int,
-        temperature: float,
-        top_p: float = 1.0,
-        system_message: str = "You are a helpful assistant.",
-    ):
-        """
-        Batch prompting for vLLM API
+    # def batch_prompt(
+    #     self,
+    #     prompts: list,
+    #     max_tokens: int,
+    #     temperature: float,
+    #     top_p: float = 1.0,
+    #     system_message: str = "You are a helpful assistant.",
+    # ):
+    #     """
+    #     Batch prompting for vLLM API
 
-        Parameters:
-        - prompts: List of prompts
-        - max_tokens: Maximum token count
-        - temperature: Temperature for sampling
-        - top_p: Top p value for sampling
-        - system_message: System message
+    #     Parameters:
+    #     - prompts: List of prompts
+    #     - max_tokens: Maximum token count
+    #     - temperature: Temperature for sampling
+    #     - top_p: Top p value for sampling
+    #     - system_message: System message
 
-        Returns:
-        - responses: List of response texts
-        """
-        if self.api != "vllm":
-            raise ValueError("Batch prompting not supported for this API.")
+    #     Returns:
+    #     - responses: List of response texts
+    #     """
+    #     if self.api != "vllm":
+    #         raise ValueError("Batch prompting not supported for this API.")
 
-        sampling_params = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            stop_token_ids=[
-                self.tokenizer.eos_token_id,
-                self.tokenizer.convert_tokens_to_ids("<|eot_id|>"),
-            ],
-        )
+    #     sampling_params = SamplingParams(
+    #         temperature=temperature,
+    #         top_p=top_p,
+    #         max_tokens=max_tokens,
+    #         stop_token_ids=[
+    #             self.tokenizer.eos_token_id,
+    #             self.tokenizer.convert_tokens_to_ids("<|eot_id|>"),
+    #         ],
+    #     )
 
-        prompt_formatted = [
-            [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-            ]
-            for prompt in prompts
-        ]
-        final_prompts = [
-            self.tokenizer.apply_chat_template(
-                message, tokenize=False, add_generation_prompt=True
-            )
-            for message in prompt_formatted
-        ]
-        outputs = self.llm.generate(final_prompts, sampling_params)
-        return [output.outputs[0].text for output in outputs]
+    #     prompt_formatted = [
+    #         [
+    #             {"role": "system", "content": system_message},
+    #             {"role": "user", "content": prompt},
+    #         ]
+    #         for prompt in prompts
+    #     ]
+    #     final_prompts = [
+    #         self.tokenizer.apply_chat_template(
+    #             message, tokenize=False, add_generation_prompt=True
+    #         )
+    #         for message in prompt_formatted
+    #     ]
+    #     outputs = self.llm.generate(final_prompts, sampling_params)
+    #     return [output.outputs[0].text for output in outputs]
 
 
 class TopicTree:
