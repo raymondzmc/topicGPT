@@ -45,6 +45,10 @@ class APIClient:
         self.api = api
         self.model = model
         self.client = None
+        
+        # Token usage tracking
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
         # Setting API key ----
         if api == "openai":
@@ -77,10 +81,31 @@ class APIClient:
             api_version = "2024-02-01",
             azure_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
             )
+        elif api == "together":
+            from together import Together
+            self.client = Together(api_key=os.environ["TOGETHER_AI_API_KEY"])
         else:
             raise ValueError(
                 f"API {api} not supported. Custom implementation required."
             )
+
+    def get_usage(self):
+        """
+        Get current cumulative token usage.
+        
+        Returns:
+        - dict: Dictionary with prompt_tokens, completion_tokens, and total_tokens
+        """
+        return {
+            "prompt_tokens": self.total_prompt_tokens,
+            "completion_tokens": self.total_completion_tokens,
+            "total_tokens": self.total_prompt_tokens + self.total_completion_tokens
+        }
+    
+    def reset_usage(self):
+        """Reset token usage counters to zero."""
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
     def estimate_token_count(self, prompt: str) -> int:
         """
@@ -155,7 +180,7 @@ class APIClient:
 
         for attempt in range(num_try):
             try:
-                if self.api in ["openai", "azure", "ollama"]:
+                if self.api in ["openai", "azure", "ollama", "together"]:
                     completion = self.client.chat.completions.create(
                         model=self.model,
                         messages=message,
@@ -163,6 +188,10 @@ class APIClient:
                         temperature=temperature,
                         top_p=top_p,
                     )
+                    # Accumulate token usage
+                    if completion.usage:
+                        self.total_prompt_tokens += completion.usage.prompt_tokens
+                        self.total_completion_tokens += completion.usage.completion_tokens
                     if verbose:
                         print(
                             "Prompt token usage:",

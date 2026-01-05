@@ -112,10 +112,11 @@ def generate_topics(
             )
 
             # Parsing topics and organizing topic tree
-            topics = [t.strip() for t in response.split("\n")]
+            topics = [t.strip() for t in response.split("\n") if t.strip()]
             for t in topics:
                 if not regex.match(topic_format, t):
-                    print(f"Invalid topic format: {t}. Skipping...")
+                    if verbose:  # Only show errors in verbose mode
+                        print(f"Invalid topic format: {t}. Skipping...")
                     continue
                 groups = regex.match(topic_format, t)
                 lvl, name, desc = int(groups[1]), groups[2].strip(), groups[3].strip()
