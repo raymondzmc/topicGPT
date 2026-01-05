@@ -10,6 +10,11 @@ and prints comparison metrics.
 """
 
 import os
+import sys
+
+# Add project root to path for local imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import yaml
 from dotenv import load_dotenv
