@@ -81,7 +81,7 @@ def assignment(
     top_p,
     max_tokens,
     verbose,
-    max_workers=8,  # Number of concurrent API calls
+    max_workers=24,  # Increased for Together AI throughput
 ):
     """
     Return documents with topics assigned to them (with concurrent processing)

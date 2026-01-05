@@ -111,7 +111,7 @@ def generate_topics(
     top_p,
     verbose,
     early_stop=100,  # Modify this parameter to control early stopping
-    max_workers=8,  # Number of concurrent API calls
+    max_workers=24,  # Increased for Together AI throughput
 ):
     """
     Generate topics from documents using LLMs.

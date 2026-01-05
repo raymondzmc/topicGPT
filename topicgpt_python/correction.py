@@ -112,7 +112,7 @@ def correct(
     top_p=1.0,
     max_tokens=1000,
     verbose=False,
-    max_workers=8,  # Number of concurrent API calls
+    max_workers=24,  # Increased for Together AI throughput
 ):
     """Return documents with assigned topics based on relevance (with concurrent processing)."""
     all_topics = "\n".join(topics_root.to_topic_list(desc=True, count=False))

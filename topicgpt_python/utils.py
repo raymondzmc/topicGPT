@@ -83,11 +83,11 @@ class APIClient:
             )
         elif api == "together":
             from together import Together
-            # Configure with reasonable timeout (120s instead of default 600s)
+            # Configure with reasonable timeout for faster failure on stalls
             # and enable retries at the client level
             self.client = Together(
                 api_key=os.environ["TOGETHER_AI_API_KEY"],
-                timeout=120.0,  # 2 minute timeout prevents hanging
+                timeout=45.0,  # Faster failure on stalled requests
                 max_retries=2,  # Built-in retries with exponential backoff
             )
         else:
@@ -327,7 +327,7 @@ class APIClient:
                 print(f"Attempt {attempt + 1}/{num_try} failed: {e}")
                 if attempt < num_try - 1:
                     # Shorter sleep for timeouts, longer for rate limits
-                    sleep_time = 5 if "timeout" in str(e).lower() else 30
+                    sleep_time = 3 if "timeout" in str(e).lower() else 8
                     time.sleep(sleep_time)
                 else:
                     raise
