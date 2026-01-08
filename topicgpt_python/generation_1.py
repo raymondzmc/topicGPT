@@ -202,7 +202,8 @@ def generate_topics(
 
 
 def generate_topic_lvl1(
-    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose
+    api, model, data, prompt_file, seed_file, out_file, topic_file, verbose,
+    max_workers=24
 ):
     """
     Generate high-level topics
@@ -216,6 +217,7 @@ def generate_topic_lvl1(
     - out_file (str): File to write results to
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
+    - max_workers (int): Number of concurrent workers for parallel processing (default: 24, use 1 for sequential)
 
     Returns:
     - topics_root (TopicTree): Root node of the topic tree
@@ -262,6 +264,7 @@ def generate_topic_lvl1(
         max_tokens,
         top_p,
         verbose,
+        max_workers=max_workers,
     )
 
     # Save generated topics

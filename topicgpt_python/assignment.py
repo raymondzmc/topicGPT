@@ -222,7 +222,8 @@ def assignment_batch(
     return responses, prompted_docs
 
 
-def assign_topics(api, model, data, prompt_file, out_file, topic_file, verbose):
+def assign_topics(api, model, data, prompt_file, out_file, topic_file, verbose,
+                  max_workers=24):
     """
     Assign topics to a list of documents
 
@@ -234,6 +235,7 @@ def assign_topics(api, model, data, prompt_file, out_file, topic_file, verbose):
     - out_file (str): Output file
     - topic_file (str): File to write topics to
     - verbose (bool): Whether to print out results
+    - max_workers (int): Number of concurrent workers for parallel processing (default: 24, use 1 for sequential)
     """
     api_client = APIClient(api=api, model=model)
     max_tokens, temperature, top_p = 1000, 0.0, 1.0
@@ -286,6 +288,7 @@ def assign_topics(api, model, data, prompt_file, out_file, topic_file, verbose):
             top_p,
             max_tokens,
             verbose,
+            max_workers=max_workers,
         )
 
     # Writing results ----

@@ -211,7 +211,8 @@ def correct_batch(
 
 
 def correct_topics(
-    api, model, data_path, prompt_path, topic_path, output_path, verbose=False
+    api, model, data_path, prompt_path, topic_path, output_path, verbose=False,
+    max_workers=24
 ):
     """
     Main function to parse, correct, and save topic assignments.
@@ -224,6 +225,7 @@ def correct_topics(
     - topic_path: Path to topic file
     - output_path: Path to save corrected output
     - verbose: Print verbose output
+    - max_workers (int): Number of concurrent workers for parallel processing (default: 24, use 1 for sequential)
     """
     api_client = APIClient(api=api, model=model)
     max_tokens, temperature, top_p = 1000, 0.6, 0.9
@@ -272,6 +274,7 @@ def correct_topics(
                 context_len,
                 reprompt_idx,
                 verbose=verbose,
+                max_workers=max_workers,
             )
         df.to_json(output_path, lines=True, orient="records")
         error, hallucinated = topic_parser(topics_root, df, verbose)
