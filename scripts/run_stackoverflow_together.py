@@ -258,7 +258,7 @@ def main():
         model=MODEL,
         data=GEN_DATA,
         prompt_file=cfg["generation"]["prompt"],
-        seed_file=cfg["generation"]["seed"],
+        seed_file="prompt/seed_stackoverflow.md",  # StackOverflow-specific seeds
         out_file=generation_file,
         topic_file=generation_topic_file,
         verbose=True,
